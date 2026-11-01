@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>My AI Chat</title>
+<style>
+:root{--bg:#f3f6f6;--panel:#fff;--ink:#16221f;--mute:#62736f;--line:#d9e2e0;--me:#0f6b5c;--meink:#fff;--bot:#e6eeec;--err:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1514;--panel:#16201e;--ink:#e6efed;--mute:#8da09b;--line:#263532;--me:#1f8f7b;--meink:#fff;--bot:#1d2a27;--err:#ff8a80}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0;font-weight:650}
+header small{color:var(--mute);display:block;font-size:12px;font-weight:400}
+.btns{display:flex;gap:8px}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:8px 12px}
+button.primary{background:var(--me);border-color:var(--me);color:var(--meink)}
+button:focus-visible,textarea:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--me);outline-offset:2px}
+#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:85%;padding:10px 14px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word}
+.me{align-self:flex-end;background:var(--me);color:var(--meink);border-bottom-right-radius:4px}
+.bot{align-self:flex-start;background:var(--bot);border-bottom-left-radius:4px}
+.err{align-self:center;color:var(--err);font-size:14px;text-align:center}
+.empty{margin:auto;text-align:center;color:var(--mute);max-width:280px}
+form{display:flex;gap:8px;padding:10px 12px;background:var(--panel);border-top:1px solid var(--line)}
+textarea{flex:1;resize:none;max-height:140px;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+#settings{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:flex-end;justify-content:center;z-index:5}
+#settings.open{display:flex}
+.sheet{background:var(--panel);width:100%;max-width:520px;max-height:90%;overflow-y:auto;border-radius:18px 18px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom,0px))}
+.sheet h2{margin:0 0 12px;font-size:18px}
+label{display:block;font-size:13px;color:var(--mute);margin:12px 0 4px}
+input,select,.sheet textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 10px}
+.row{display:flex;gap:8px;margin-top:16px}
+.row button{flex:1}
+.note{font-size:12px;color:var(--mute);margin-top:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1>My AI Chat<small id="sub"></small></h1>
+  <div class="btns"><button id="clear" type="button">New chat</button><button id="open" type="button">Settings</button></div>
+</header>
+<div id="log" aria-live="polite"></div>
+<form id="f">
+  <textarea id="t" rows="1" placeholder="Type a message" aria-label="Message"></textarea>
+  <button class="primary" id="send" type="submit">Send</button>
+</form>
+
+<div id="settings">
+  <div class="sheet">
+    <h2>Settings</h2>
+    <label for="prov">Provider</label>
+    <select id="prov">
+      <option value="mistral">Mistral</option>
+      <option value="nvidia">NVIDIA (Nemotron)</option>
+    </select>
+    <label for="key">API key</label>
+    <input id="key" type="password" autocomplete="off" placeholder="Paste your key">
+    <label for="model">Model name</label>
+    <input id="model" type="text" autocapitalize="off" autocorrect="off">
+    <label for="url">API address</label>
+    <input id="url" type="text" autocapitalize="off" autocorrect="off">
+    <label for="sys">Personality (system prompt)</label>
+    <textarea id="sys" rows="3"></textarea>
+    <p class="note">Your key is saved only in this browser on this device. If the NVIDIA provider fails with a network error, browsers may be blocked from calling it directly; use Mistral or a proxy address instead.</p>
+    <div class="row"><button type="button" id="close">Cancel</button><button type="button" class="primary" id="save">Save</button></div>
+  </div>
+</div>
+
+<script>
+const PRESETS={
+  mistral:{url:"https://api.mistral.ai/v1/chat/completions",model:"mistral-small-latest"},
+  nvidia:{url:"https://integrate.api.nvidia.com/v1/chat/completions",model:"nvidia/llama-3.3-nemotron-super-49b-v1.5"}
+};
+const $=id=>document.getElementById(id);
+const log=$("log"),t=$("t");
+let cfg={prov:"mistral",key:"",model:PRESETS.mistral.model,url:PRESETS.mistral.url,sys:"You are a friendly, helpful assistant. Keep answers clear and concise."};
+let history=[];
+
+try{const s=localStorage.getItem("cfg");if(s)cfg=Object.assign(cfg,JSON.parse(s));}catch(e){}
+try{const h=localStorage.getItem("hist");if(h)history=JSON.parse(h);}catch(e){}
+
+function saveHist(){try{localStorage.setItem("hist",JSON.stringify(history));}catch(e){}}
+function sub(){$("sub").textContent=cfg.model;}
+function add(role,text){
+  const d=document.createElement("div");
+  d.className="msg "+(role==="user"?"me":"bot");
+  d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;
+}
+function note(text){
+  const d=document.createElement("div");d.className="err";d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;
+}
+function render(){
+  log.innerHTML="";
+  if(!history.length){
+    const e=document.createElement("div");e.className="empty";
+    e.textContent=cfg.key?"Say something to start chatting.":"Open Settings and add your API key to start.";
+    log.appendChild(e);
+  }
+  history.forEach(m=>add(m.role,m.content));
+  sub();
+}
+
+$("open").onclick=()=>{
+  $("prov").value=cfg.prov;$("key").value=cfg.key;$("model").value=cfg.model;$("url").value=cfg.url;$("sys").value=cfg.sys;
+  $("settings").classList.add("open");
+};
+$("close").onclick=()=>$("settings").classList.remove("open");
+$("prov").onchange=()=>{const p=PRESETS[$("prov").value];$("model").value=p.model;$("url").value=p.url;};
+$("save").onclick=()=>{
+  cfg={prov:$("prov").value,key:$("key").value.trim(),model:$("model").value.trim(),url:$("url").value.trim(),sys:$("sys").value.trim()};
+  try{localStorage.setItem("cfg",JSON.stringify(cfg));}catch(e){}
+  $("settings").classList.remove("open");render();
+};
+$("clear").onclick=()=>{history=[];saveHist();render();};
+
+t.addEventListener("input",()=>{t.style.height="auto";t.style.height=Math.min(t.scrollHeight,140)+"px";});
+t.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey&&window.innerWidth>700){e.preventDefault();$("f").requestSubmit();}});
+
+$("f").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const text=t.value.trim();if(!text)return;
+  if(!cfg.key){note("Add your API key in Settings first.");return;}
+  if(!history.length)log.innerHTML="";
+  t.value="";t.style.height="auto";
+  history.push({role:"user",content:text});add("user",text);
+  const wait=add("assistant","…");$("send").disabled=true;
+  try{
+    const msgs=(cfg.sys?[{role:"system",content:cfg.sys}]:[]).concat(history.slice(-20));
+    const r=await fetch(cfg.url,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+cfg.key},
+      body:JSON.stringify({model:cfg.model,messages:msgs,max_tokens:1024,temperature:0.7})});
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error((data.error&&data.error.message)||data.message||("Request failed ("+r.status+")"));
+    const reply=data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content;
+    if(!reply)throw new Error("The model sent an empty reply.");
+    wait.textContent=reply;history.push({role:"assistant",content:reply});saveHist();
+  }catch(err){
+    wait.remove();history.pop();
+    note(err instanceof TypeError?"Network error. Check your connection, or the provider may block browser requests.":err.message);
+  }
+  $("send").disabled=false;log.scrollTop=log.scrollHeight;
+});
+
+render();
+</script>
+</body>
+</html>
